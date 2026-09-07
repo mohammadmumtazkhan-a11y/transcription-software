@@ -53,6 +53,12 @@ public partial class MainWindowViewModel : ObservableObject
     private TimeSpan _totalDuration = TimeSpan.Zero;
 
     [ObservableProperty]
+    private double _currentPositionSeconds = 0.0;
+
+    [ObservableProperty]
+    private double _totalDurationSeconds = 0.0;
+
+    [ObservableProperty]
     private bool _isPlaying = false;
 
     public ObservableCollection<CleanSentence> Sentences { get; } = new();

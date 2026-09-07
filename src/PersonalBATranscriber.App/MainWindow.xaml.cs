@@ -49,9 +49,12 @@ public partial class MainWindow : Window
         if (AudioPlayer.NaturalDuration.HasTimeSpan && !_isDraggingSlider)
         {
             _vm.CurrentPosition = AudioPlayer.Position;
+            _vm.CurrentPositionSeconds = AudioPlayer.Position.TotalSeconds;
+
             if (_vm.TotalDuration == TimeSpan.Zero)
             {
                 _vm.TotalDuration = AudioPlayer.NaturalDuration.TimeSpan;
+                _vm.TotalDurationSeconds = AudioPlayer.NaturalDuration.TimeSpan.TotalSeconds;
             }
         }
     }
@@ -60,6 +63,7 @@ public partial class MainWindow : Window
     {
         AudioPlayer.Position = position;
         _vm.CurrentPosition = position;
+        _vm.CurrentPositionSeconds = position.TotalSeconds;
     }
 
     private void OnRequestPlay()
