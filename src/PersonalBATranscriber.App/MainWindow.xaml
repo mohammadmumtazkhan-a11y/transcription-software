@@ -216,7 +216,7 @@
                                             <!-- Editable Sentence Text -->
                                             <StackPanel Grid.Column="1" VerticalAlignment="Center">
                                                 <TextBlock Text="{Binding SpeakerLabel}" FontSize="11" FontWeight="Bold" Foreground="#64748B" Margin="0,0,0,2" />
-                                                <TextBox Text="{Binding UserEditedText, Mode=TwoWay, UpdateSourceTrigger=LostFocus, TargetNullValue={Binding CleanedText}}"
+                                                <TextBox Text="{Binding UserEditedText, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                                                          BorderThickness="0" Background="Transparent" TextWrapping="Wrap" 
                                                          FontSize="13" Foreground="#0F172A" />
                                             </StackPanel>
