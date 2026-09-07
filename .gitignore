@@ -1,0 +1,49 @@
+# Build and Output Folders
+bin/
+obj/
+out/
+dist/
+publish/
+
+# Visual Studio / Rider / VS Code
+.vs/
+.vscode/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Python & Virtual Environments (if any scratch scripts used)
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+
+# Media & Temporary Data
+*.mp3
+*.wav
+*.m4a
+*.aac
+*.mp4
+*.mkv
+*.mov
+*.opus
+temp/
+scratch/
+*.taproj
+*.db
+*.sqlite
+
+# Inno Setup / Package outputs
+Output/
+*.exe
+!Setup.exe
+
+# OS generated files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
