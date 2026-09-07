@@ -90,12 +90,4 @@ public partial class MainWindow : Window
             AudioPlayer.Position = TimeSpan.FromSeconds(e.NewValue);
         }
     }
-
-    private void ApiKeyBox_PasswordChanged(object sender, RoutedEventArgs e)
-    {
-        if (sender is PasswordBox box)
-        {
-            _vm.GroqApiKey = box.Password;
-        }
-    }
 }

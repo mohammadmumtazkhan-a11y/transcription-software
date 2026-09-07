@@ -106,17 +106,25 @@ public partial class MainWindowViewModel : ObservableObject
     }
 
     [RelayCommand]
+    public void OpenSettings()
+    {
+        var dialog = new Views.SettingsDialog
+        {
+            Owner = Application.Current.MainWindow
+        };
+
+        if (dialog.ShowDialog() == true)
+        {
+            GroqApiKey = dialog.SavedApiKey;
+            StatusMessage = "Groq API key configured successfully.";
+            _ = RefreshBudgetDisplayAsync();
+        }
+    }
+
+    [RelayCommand]
     public void SaveApiKey()
     {
-        if (string.IsNullOrWhiteSpace(GroqApiKey))
-        {
-            MessageBox.Show("Please enter a valid Groq API key.", "API Key", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-
-        CredentialVault.SaveApiKey("GROQ_API_KEY", GroqApiKey.Trim());
-        StatusMessage = "Groq API key saved securely in Windows Credential Manager.";
-        MessageBox.Show("API key saved securely using Windows DPAPI.", "Success", MessageBoxButton.OK, MessageBoxImage.Information);
+        OpenSettings();
     }
 
     [RelayCommand]
@@ -168,14 +176,26 @@ public partial class MainWindowViewModel : ObservableObject
     {
         if (string.IsNullOrWhiteSpace(SourceMediaFilePath) || !File.Exists(SourceMediaFilePath))
         {
-            MessageBox.Show("Please select a valid media file first.", "No File Selected", MessageBoxButton.OK, MessageBoxImage.Warning);
+            MessageBox.Show("Please select an audio or video file first by clicking 'Open Recording...'.", "No File Selected", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
 
         if (string.IsNullOrWhiteSpace(GroqApiKey))
         {
-            MessageBox.Show("Please enter and save your Groq API key in the top settings bar before starting.", "API Key Required", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
+            var dialog = new Views.SettingsDialog
+            {
+                Owner = Application.Current.MainWindow
+            };
+
+            if (dialog.ShowDialog() == true && !string.IsNullOrWhiteSpace(dialog.SavedApiKey))
+            {
+                GroqApiKey = dialog.SavedApiKey;
+            }
+            else
+            {
+                StatusMessage = "Transcription requires a valid Groq API key.";
+                return;
+            }
         }
 
         IsProcessing = true;
