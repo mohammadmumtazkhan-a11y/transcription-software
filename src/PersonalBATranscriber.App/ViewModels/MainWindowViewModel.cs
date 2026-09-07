@@ -212,93 +212,125 @@ public partial class MainWindowViewModel : ObservableObject
 
         try
         {
-            // 1. Check Duration (< 3 hours)
-            var duration = await _audioExtractor.GetMediaDurationSecondsAsync(SourceMediaFilePath, _cts.Token);
-            CurrentProject.MediaDurationSeconds = duration;
-            TotalDuration = TimeSpan.FromSeconds(duration);
-
-            if (duration > (3 * 3600))
-            {
-                MessageBox.Show($"File duration ({TimeSpan.FromSeconds(duration):hh\\:mm\\:ss}) exceeds the 3-hour limit.", "File Too Long", MessageBoxButton.OK, MessageBoxImage.Error);
-                IsProcessing = false;
-                return;
-            }
-
-            // 2. Extract 16kHz audio
-            StatusMessage = "2/4 Extracting 16kHz mono audio...";
-            ProgressValue = 0.20;
-
-            var tempDir = Path.Combine(Path.GetTempPath(), "PersonalBATranscriber", CurrentProject.ProjectId);
-            var wavPath = await _audioExtractor.Extract16kHzMonoAudioAsync(SourceMediaFilePath, tempDir, cancellationToken: _cts.Token);
-            CurrentProject.ExtractedAudioFilePath = wavPath;
-
-            // 3. Chunk audio
-            StatusMessage = "3/4 Segmenting audio into 10-minute speech chunks...";
-            ProgressValue = 0.35;
-            var chunks = await _audioExtractor.ChunkAudioAsync(wavPath, Path.Combine(tempDir, "chunks"), cancellationToken: _cts.Token);
-
-            // 4. Reserve budget and call Groq
-            var groqClient = new GroqSpeechClient(GroqApiKey.Trim());
+            var mediaPath = SourceMediaFilePath;
+            var apiKey = GroqApiKey.Trim();
             var terms = GlossaryTerms.Select(t => t.TermText).ToList();
+            var projectId = CurrentProject.ProjectId;
 
-            var estimatedCost = (decimal)(duration / 3600.0) * GroqSpeechClient.WhisperLargeV3RatePerHour + 0.02m;
-            var txId = await _ledgerService.ReserveSpendAsync(CurrentProject.ProjectId, "GROQ", "whisper-large-v3", duration, estimatedCost);
-
-            StatusMessage = $"4/4 Cloud transcribing {chunks.Count} audio chunk(s) with Groq Whisper Large-V3...";
-            Sentences.Clear();
-
-            decimal totalActualCost = 0m;
-            int totalInTokens = 0, totalOutTokens = 0;
-            int sentenceOrder = 1;
-
-            for (int i = 0; i < chunks.Count; i++)
+            await Task.Run(async () =>
             {
-                var chunk = chunks[i];
-                StatusMessage = $"Transcribing chunk {i + 1} of {chunks.Count}...";
-
-                var (rawText, chunkDur, chunkCost) = await groqClient.TranscribeChunkAsync(chunk.ChunkPath, terms, _cts.Token);
-                totalActualCost += chunkCost;
-
-                // Cleanup with Llama 3.1 8B
-                var (cleanedText, inTok, outTok, llmCost) = await groqClient.CleanTranscriptTextAsync(rawText, _cts.Token);
-                totalActualCost += llmCost;
-                totalInTokens += inTok;
-                totalOutTokens += outTok;
-
-                // Split into sentences and add to collection
-                var sentenceTexts = cleanedText.Split(new[] { ". ", "! ", "? " }, StringSplitOptions.RemoveEmptyEntries);
-                var segTime = chunk.StartSeconds;
-                var timeStep = sentenceTexts.Length > 0 ? (chunk.DurationSeconds / sentenceTexts.Length) : 0;
-
-                foreach (var text in sentenceTexts)
+                // 1. Check Duration (< 3 hours)
+                var duration = await _audioExtractor.GetMediaDurationSecondsAsync(mediaPath, _cts.Token);
+                await Application.Current.Dispatcher.InvokeAsync(() =>
                 {
-                    var cleanText = text.Trim();
-                    if (!cleanText.EndsWith('.') && !cleanText.EndsWith('!') && !cleanText.EndsWith('?'))
-                        cleanText += ".";
+                    CurrentProject.MediaDurationSeconds = duration;
+                    TotalDuration = TimeSpan.FromSeconds(duration);
+                });
 
-                    var sentence = new CleanSentence
+                if (duration > (3 * 3600))
+                {
+                    await Application.Current.Dispatcher.InvokeAsync(() =>
                     {
-                        SentenceId = $"SNT-{sentenceOrder:D4}",
-                        ParentSegmentId = $"SEG-{i:D4}",
-                        AnchorTimestamp = segTime,
-                        SpeakerLabel = (sentenceOrder % 2 == 1) ? "Speaker 1" : "Speaker 2",
-                        CleanedText = cleanText,
-                        DisplayOrder = sentenceOrder++
-                    };
-
-                    Sentences.Add(sentence);
-                    segTime += timeStep;
+                        MessageBox.Show($"File duration ({TimeSpan.FromSeconds(duration):hh\\:mm\\:ss}) exceeds the 3-hour limit.", "File Too Long", MessageBoxButton.OK, MessageBoxImage.Error);
+                    });
+                    return;
                 }
 
-                ProgressValue = 0.35 + (0.60 * ((double)(i + 1) / chunks.Count));
-            }
+                // 2. Extract 16kHz audio
+                await Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    StatusMessage = "2/4 Extracting 16kHz mono audio...";
+                    ProgressValue = 0.20;
+                });
 
-            // Commit final spend in ledger
-            await _ledgerService.CommitSpendAsync(txId, totalActualCost, totalInTokens, totalOutTokens);
-            await RefreshBudgetDisplayAsync();
+                var tempDir = Path.Combine(Path.GetTempPath(), "PersonalBATranscriber", projectId);
+                var wavPath = await _audioExtractor.Extract16kHzMonoAudioAsync(mediaPath, tempDir, cancellationToken: _cts.Token);
+                CurrentProject.ExtractedAudioFilePath = wavPath;
 
-            ProgressValue = 1.0;
-            StatusMessage = $"Transcription complete! Generated {Sentences.Count} sentence turns. Total Job Cost: ${totalActualCost:F4}.";
+                // 3. Chunk audio
+                await Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    StatusMessage = "3/4 Segmenting audio into 10-minute speech chunks...";
+                    ProgressValue = 0.35;
+                });
+                var chunks = await _audioExtractor.ChunkAudioAsync(wavPath, Path.Combine(tempDir, "chunks"), cancellationToken: _cts.Token);
+
+                // 4. Reserve budget and call Groq
+                var groqClient = new GroqSpeechClient(apiKey);
+
+                var estimatedCost = (decimal)(duration / 3600.0) * GroqSpeechClient.WhisperLargeV3RatePerHour + 0.02m;
+                var txId = await _ledgerService.ReserveSpendAsync(projectId, "GROQ", "whisper-large-v3", duration, estimatedCost);
+
+                await Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    StatusMessage = $"4/4 Cloud transcribing {chunks.Count} audio chunk(s) with Groq Whisper Large-V3...";
+                    Sentences.Clear();
+                });
+
+                decimal totalActualCost = 0m;
+                int totalInTokens = 0, totalOutTokens = 0;
+                int sentenceOrder = 1;
+
+                for (int i = 0; i < chunks.Count; i++)
+                {
+                    var chunk = chunks[i];
+                    await Application.Current.Dispatcher.InvokeAsync(() =>
+                    {
+                        StatusMessage = $"Transcribing chunk {i + 1} of {chunks.Count}...";
+                    });
+
+                    var (rawText, chunkDur, chunkCost) = await groqClient.TranscribeChunkAsync(chunk.ChunkPath, terms, _cts.Token);
+                    totalActualCost += chunkCost;
+
+                    // Cleanup with Llama 3.1 8B
+                    var (cleanedText, inTok, outTok, llmCost) = await groqClient.CleanTranscriptTextAsync(rawText, _cts.Token);
+                    totalActualCost += llmCost;
+                    totalInTokens += inTok;
+                    totalOutTokens += outTok;
+
+                    // Split into sentences and add to collection
+                    var sentenceTexts = cleanedText.Split(new[] { ". ", "! ", "? " }, StringSplitOptions.RemoveEmptyEntries);
+                    var segTime = chunk.StartSeconds;
+                    var timeStep = sentenceTexts.Length > 0 ? (chunk.DurationSeconds / sentenceTexts.Length) : 0;
+
+                    foreach (var text in sentenceTexts)
+                    {
+                        var cleanText = text.Trim();
+                        if (!cleanText.EndsWith('.') && !cleanText.EndsWith('!') && !cleanText.EndsWith('?'))
+                            cleanText += ".";
+
+                        var sentence = new CleanSentence
+                        {
+                            SentenceId = $"SNT-{sentenceOrder:D4}",
+                            ParentSegmentId = $"SEG-{i:D4}",
+                            AnchorTimestamp = segTime,
+                            SpeakerLabel = (sentenceOrder % 2 == 1) ? "Speaker 1" : "Speaker 2",
+                            CleanedText = cleanText,
+                            DisplayOrder = sentenceOrder++
+                        };
+
+                        await Application.Current.Dispatcher.InvokeAsync(() =>
+                        {
+                            Sentences.Add(sentence);
+                        });
+                        segTime += timeStep;
+                    }
+
+                    await Application.Current.Dispatcher.InvokeAsync(() =>
+                    {
+                        ProgressValue = 0.35 + (0.60 * ((double)(i + 1) / chunks.Count));
+                    });
+                }
+
+                // Commit final spend in ledger
+                await _ledgerService.CommitSpendAsync(txId, totalActualCost, totalInTokens, totalOutTokens);
+                await Application.Current.Dispatcher.InvokeAsync(async () =>
+                {
+                    await RefreshBudgetDisplayAsync();
+                    ProgressValue = 1.0;
+                    StatusMessage = $"Transcription complete! Generated {Sentences.Count} sentence turns. Total Job Cost: ${totalActualCost:F4}.";
+                });
+            }, _cts.Token);
         }
         catch (OperationCanceledException)
         {
@@ -331,43 +363,62 @@ public partial class MainWindowViewModel : ObservableObject
 
         try
         {
-            var duration = await _audioExtractor.GetMediaDurationSecondsAsync(SourceMediaFilePath, _cts.Token);
-            CurrentProject.MediaDurationSeconds = duration;
-            TotalDuration = TimeSpan.FromSeconds(duration);
-
-            ProgressValue = 0.20;
-            StatusMessage = "1/3 Extracting 16kHz audio with FFmpeg...";
-            var tempDir = Path.Combine(Path.GetTempPath(), "PersonalBATranscriber", CurrentProject.ProjectId);
-            var wavPath = await _audioExtractor.Extract16kHzMonoAudioAsync(SourceMediaFilePath, tempDir, cancellationToken: _cts.Token);
-            CurrentProject.ExtractedAudioFilePath = wavPath;
-
-            ProgressValue = 0.25;
-            StatusMessage = $"2/3 Running offline transcription on CPU using faster-whisper '{SelectedOfflineModel}'...";
-
-            Sentences.Clear();
+            var mediaPath = SourceMediaFilePath;
+            var projectId = CurrentProject.ProjectId;
+            var model = SelectedOfflineModel;
             var terms = GlossaryTerms.Select(t => t.TermText).ToList();
-            var progressReporter = new Progress<string>(msg => StatusMessage = msg);
 
-            Action<CleanSentence, AcousticSegment, double> onStreamed = (sentence, segment, ratio) =>
+            await Task.Run(async () =>
             {
-                Application.Current.Dispatcher.Invoke(() =>
+                var duration = await _audioExtractor.GetMediaDurationSecondsAsync(mediaPath, _cts.Token);
+                await Application.Current.Dispatcher.InvokeAsync(() =>
                 {
-                    Sentences.Add(sentence);
-                    ProgressValue = 0.25 + (0.70 * ratio);
-                    StatusMessage = $"Offline [{SelectedOfflineModel}]: [{sentence.FormattedTimestamp} / {TotalDuration:hh\\:mm\\:ss}] ({Sentences.Count} sentences) • {sentence.DisplayText}";
+                    CurrentProject.MediaDurationSeconds = duration;
+                    TotalDuration = TimeSpan.FromSeconds(duration);
+                    ProgressValue = 0.15;
+                    StatusMessage = "1/3 Extracting 16kHz audio with FFmpeg...";
                 });
-            };
 
-            var results = await _offlineService.TranscribeOfflineAsync(
-                wavPath, 
-                SelectedOfflineModel, 
-                terms, 
-                onStreamed,
-                progressReporter, 
-                _cts.Token);
+                var tempDir = Path.Combine(Path.GetTempPath(), "PersonalBATranscriber", projectId);
+                var wavPath = await _audioExtractor.Extract16kHzMonoAudioAsync(mediaPath, tempDir, cancellationToken: _cts.Token);
+                CurrentProject.ExtractedAudioFilePath = wavPath;
 
-            ProgressValue = 1.0;
-            StatusMessage = $"Offline transcription complete! Generated {Sentences.Count} sentence turns on local CPU. Cloud cost: $0.00.";
+                await Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    ProgressValue = 0.25;
+                    StatusMessage = $"2/3 Running offline transcription on CPU using faster-whisper '{model}'...";
+                    Sentences.Clear();
+                });
+
+                var progressReporter = new Progress<string>(msg =>
+                {
+                    Application.Current.Dispatcher.InvokeAsync(() => StatusMessage = msg);
+                });
+
+                Action<CleanSentence, AcousticSegment, double> onStreamed = (sentence, segment, ratio) =>
+                {
+                    Application.Current.Dispatcher.InvokeAsync(() =>
+                    {
+                        Sentences.Add(sentence);
+                        ProgressValue = 0.25 + (0.70 * ratio);
+                        StatusMessage = $"Offline [{model}]: [{sentence.FormattedTimestamp} / {TotalDuration:hh\\:mm\\:ss}] ({Sentences.Count} sentences) • {sentence.DisplayText}";
+                    });
+                };
+
+                await _offlineService.TranscribeOfflineAsync(
+                    wavPath, 
+                    model, 
+                    terms, 
+                    onStreamed,
+                    progressReporter, 
+                    _cts.Token);
+
+                await Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    ProgressValue = 1.0;
+                    StatusMessage = $"Offline transcription complete! Generated {Sentences.Count} sentence turns on local CPU. Cloud cost: $0.00.";
+                });
+            }, _cts.Token);
         }
         catch (OperationCanceledException)
         {

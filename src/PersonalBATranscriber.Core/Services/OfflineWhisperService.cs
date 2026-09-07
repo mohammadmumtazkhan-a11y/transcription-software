@@ -88,16 +88,28 @@ public class OfflineWhisperService
         using var process = new Process { StartInfo = startInfo };
         process.Start();
 
+        using var registration = cancellationToken.Register(() =>
+        {
+            try
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+            catch { }
+        });
+
         var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
 
         double totalDuration = 0;
         var results = new List<(CleanSentence, AcousticSegment)>();
         int order = 1;
 
-        // Read stdout line by line in real-time
-        while (!process.StandardOutput.EndOfStream)
+        // Read stdout line by line in real-time without blocking EndOfStream property
+        string? line;
+        while ((line = await process.StandardOutput.ReadLineAsync(cancellationToken)) != null)
         {
-            var line = await process.StandardOutput.ReadLineAsync(cancellationToken);
             if (string.IsNullOrWhiteSpace(line)) continue;
 
             if (line.StartsWith("INFO:DURATION:"))
