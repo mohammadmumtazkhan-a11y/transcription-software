@@ -87,9 +87,12 @@ public class OfflineWhisperService
         process.Start();
 
         var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
+        var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+
         await process.WaitForExitAsync(cancellationToken);
 
         var stderr = await stderrTask;
+        var stdout = await stdoutTask;
 
         if (process.ExitCode != 0 || !File.Exists(tempJson))
         {

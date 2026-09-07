@@ -325,8 +325,8 @@ public partial class MainWindowViewModel : ObservableObject
         }
 
         IsProcessing = true;
-        ProgressValue = 0.10;
-        StatusMessage = "1/3 Probing media file and extracting 16kHz audio...";
+        ProgressValue = 0.05;
+        StatusMessage = "1/3 Probing media file duration...";
         _cts = new CancellationTokenSource();
 
         try
@@ -335,11 +335,13 @@ public partial class MainWindowViewModel : ObservableObject
             CurrentProject.MediaDurationSeconds = duration;
             TotalDuration = TimeSpan.FromSeconds(duration);
 
+            ProgressValue = 0.20;
+            StatusMessage = "1/3 Extracting 16kHz audio with FFmpeg...";
             var tempDir = Path.Combine(Path.GetTempPath(), "PersonalBATranscriber", CurrentProject.ProjectId);
             var wavPath = await _audioExtractor.Extract16kHzMonoAudioAsync(SourceMediaFilePath, tempDir, cancellationToken: _cts.Token);
             CurrentProject.ExtractedAudioFilePath = wavPath;
 
-            ProgressValue = 0.30;
+            ProgressValue = 0.40;
             StatusMessage = $"2/3 Running 100% offline transcription on CPU using faster-whisper '{SelectedOfflineModel}'...";
 
             var terms = GlossaryTerms.Select(t => t.TermText).ToList();

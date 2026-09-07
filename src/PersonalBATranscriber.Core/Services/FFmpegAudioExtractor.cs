@@ -62,8 +62,14 @@ public class FFmpegAudioExtractor
         using var process = new Process { StartInfo = startInfo };
         process.Start();
 
-        var stderr = await process.StandardError.ReadToEndAsync(cancellationToken);
+        // Concurrently drain stdout & stderr to prevent pipe buffer deadlocks
+        var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
+        var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+
         await process.WaitForExitAsync(cancellationToken);
+
+        var stderr = await stderrTask;
+        await stdoutTask;
 
         // Parse: Duration: 01:23:45.67,
         var match = Regex.Match(stderr, @"Duration:\s*(\d{2}):(\d{2}):(\d{2}\.?\d*)");
@@ -90,14 +96,15 @@ public class FFmpegAudioExtractor
         Directory.CreateDirectory(outputDirectory);
         var outputWav = Path.Combine(outputDirectory, $"{Path.GetFileNameWithoutExtension(mediaFilePath)}_16k.wav");
 
-        // Extract 16kHz Mono 16-bit PCM WAV (ideal for STT)
-        var arguments = $"-y -i \"{mediaFilePath}\" -vn -acodec pcm_s16le -ar 16000 -ac 1 \"{outputWav}\"";
+        // Extract 16kHz Mono 16-bit PCM WAV with -loglevel error to prevent pipe saturation
+        var arguments = $"-y -loglevel error -i \"{mediaFilePath}\" -vn -acodec pcm_s16le -ar 16000 -ac 1 \"{outputWav}\"";
 
         var startInfo = new ProcessStartInfo
         {
             FileName = _ffmpegPath,
             Arguments = arguments,
             RedirectStandardError = true,
+            RedirectStandardOutput = true,
             UseShellExecute = false,
             CreateNoWindow = true
         };
@@ -105,11 +112,18 @@ public class FFmpegAudioExtractor
         using var process = new Process { StartInfo = startInfo };
         process.Start();
 
+        // Concurrently drain stdout and stderr so OS pipe buffers never fill up
+        var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
+        var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+
         await process.WaitForExitAsync(cancellationToken);
+
+        var stderr = await stderrTask;
+        await stdoutTask;
 
         if (process.ExitCode != 0 || !File.Exists(outputWav))
         {
-            throw new InvalidOperationException($"FFmpeg extraction failed with exit code {process.ExitCode}");
+            throw new InvalidOperationException($"FFmpeg audio extraction failed (ExitCode {process.ExitCode}): {stderr}");
         }
 
         progress?.Report(1.0);
@@ -136,21 +150,27 @@ public class FFmpegAudioExtractor
             var currentDuration = Math.Min(chunkLengthSeconds, totalDuration - currentStart);
             var chunkFileName = Path.Combine(chunksDirectory, $"chunk_{chunkIndex:D4}.wav");
 
-            // ffmpeg -y -ss start -i input -t duration -c copy chunk.wav
-            var args = $"-y -ss {currentStart.ToString("F2", CultureInfo.InvariantCulture)} -t {currentDuration.ToString("F2", CultureInfo.InvariantCulture)} -i \"{wavFilePath}\" -c copy \"{chunkFileName}\"";
+            var args = $"-y -loglevel error -ss {currentStart.ToString("F2", CultureInfo.InvariantCulture)} -t {currentDuration.ToString("F2", CultureInfo.InvariantCulture)} -i \"{wavFilePath}\" -c copy \"{chunkFileName}\"";
 
             var startInfo = new ProcessStartInfo
             {
                 FileName = _ffmpegPath,
                 Arguments = args,
                 RedirectStandardError = true,
+                RedirectStandardOutput = true,
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
 
             using var process = new Process { StartInfo = startInfo };
             process.Start();
+
+            var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
+            var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+
             await process.WaitForExitAsync(cancellationToken);
+            await stderrTask;
+            await stdoutTask;
 
             if (File.Exists(chunkFileName))
             {
