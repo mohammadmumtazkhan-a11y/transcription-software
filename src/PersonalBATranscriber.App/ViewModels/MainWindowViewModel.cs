@@ -17,6 +17,7 @@ public partial class MainWindowViewModel : ObservableObject
 {
     private readonly CostLedgerService _ledgerService;
     private readonly FFmpegAudioExtractor _audioExtractor;
+    private readonly OfflineWhisperService _offlineService;
     private CancellationTokenSource? _cts;
 
     [ObservableProperty]
@@ -61,6 +62,11 @@ public partial class MainWindowViewModel : ObservableObject
     [ObservableProperty]
     private bool _isPlaying = false;
 
+    [ObservableProperty]
+    private string _selectedOfflineModel = "small"; // base, small, medium
+
+    public ObservableCollection<string> AvailableOfflineModels { get; } = new() { "base", "small", "medium" };
+
     public ObservableCollection<CleanSentence> Sentences { get; } = new();
     public ObservableCollection<GlossaryTerm> GlossaryTerms { get; } = new();
 
@@ -75,6 +81,7 @@ public partial class MainWindowViewModel : ObservableObject
     {
         _ledgerService = new CostLedgerService();
         _audioExtractor = new FFmpegAudioExtractor();
+        _offlineService = new OfflineWhisperService();
 
         // Load existing API key if available
         var key = CredentialVault.GetApiKey("GROQ_API_KEY");
@@ -301,6 +308,67 @@ public partial class MainWindowViewModel : ObservableObject
         {
             StatusMessage = $"Error: {ex.Message}";
             MessageBox.Show($"Transcription failed:\n{ex.Message}", "Processing Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            IsProcessing = false;
+        }
+    }
+
+    [RelayCommand]
+    public async Task StartOfflineTranscriptionAsync()
+    {
+        if (string.IsNullOrWhiteSpace(SourceMediaFilePath) || !File.Exists(SourceMediaFilePath))
+        {
+            MessageBox.Show("Please select an audio or video file first by clicking 'Open Recording...'.", "No File Selected", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        IsProcessing = true;
+        ProgressValue = 0.10;
+        StatusMessage = "1/3 Probing media file and extracting 16kHz audio...";
+        _cts = new CancellationTokenSource();
+
+        try
+        {
+            var duration = await _audioExtractor.GetMediaDurationSecondsAsync(SourceMediaFilePath, _cts.Token);
+            CurrentProject.MediaDurationSeconds = duration;
+            TotalDuration = TimeSpan.FromSeconds(duration);
+
+            var tempDir = Path.Combine(Path.GetTempPath(), "PersonalBATranscriber", CurrentProject.ProjectId);
+            var wavPath = await _audioExtractor.Extract16kHzMonoAudioAsync(SourceMediaFilePath, tempDir, cancellationToken: _cts.Token);
+            CurrentProject.ExtractedAudioFilePath = wavPath;
+
+            ProgressValue = 0.30;
+            StatusMessage = $"2/3 Running 100% offline transcription on CPU using faster-whisper '{SelectedOfflineModel}'...";
+
+            var terms = GlossaryTerms.Select(t => t.TermText).ToList();
+            var progressReporter = new Progress<string>(msg => StatusMessage = msg);
+
+            var results = await _offlineService.TranscribeOfflineAsync(
+                wavPath, 
+                SelectedOfflineModel, 
+                terms, 
+                progressReporter, 
+                _cts.Token);
+
+            Sentences.Clear();
+            foreach (var (sentence, _) in results)
+            {
+                Sentences.Add(sentence);
+            }
+
+            ProgressValue = 1.0;
+            StatusMessage = $"Offline transcription complete! Generated {Sentences.Count} sentence turns on local CPU. Cloud cost: $0.00.";
+        }
+        catch (OperationCanceledException)
+        {
+            StatusMessage = "Offline transcription canceled by user.";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Offline Error: {ex.Message}";
+            MessageBox.Show($"Offline transcription failed:\n{ex.Message}", "Offline Error", MessageBoxButton.OK, MessageBoxImage.Error);
         }
         finally
         {

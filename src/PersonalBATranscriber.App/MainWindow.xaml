@@ -138,11 +138,26 @@
                                Foreground="#64748B" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center" Margin="10,0,0,0" />
                 </Grid>
 
-                <!-- Start Transcription Button -->
+                <!-- Transcribe Buttons -->
                 <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                    <!-- Offline Model Selector -->
+                    <TextBlock Text="Model:" VerticalAlignment="Center" Margin="0,0,4,0" Foreground="#64748B" FontSize="11" />
+                    <ComboBox ItemsSource="{Binding AvailableOfflineModels}" SelectedItem="{Binding SelectedOfflineModel}" 
+                              Width="74" Margin="0,0,8,0" VerticalAlignment="Center" Padding="4,4" FontSize="11" ToolTip="Select local CPU model" />
+
+                    <!-- Offline Button -->
+                    <Button Content="💻 Transcribe Offline" Command="{Binding StartOfflineTranscriptionCommand}" 
+                            IsEnabled="{Binding IsProcessing, Converter={StaticResource BoolToVis}, ConverterParameter=Invert}"
+                            Background="#334155" Foreground="#FFFFFF" BorderThickness="0" Padding="12,8" FontWeight="Bold" Margin="0,0,8,0"
+                            ToolTip="Transcribe locally on your CPU with faster-whisper (100% offline, zero cloud cost)" />
+
+                    <!-- Cloud Button -->
                     <Button Content="⚡ Transcribe with Groq" Command="{Binding StartTranscriptionCommand}" 
                             IsEnabled="{Binding IsProcessing, Converter={StaticResource BoolToVis}, ConverterParameter=Invert}"
-                            Background="#059669" Foreground="#FFFFFF" BorderThickness="0" Padding="14,8" FontWeight="Bold" />
+                            Background="#059669" Foreground="#FFFFFF" BorderThickness="0" Padding="14,8" FontWeight="Bold"
+                            ToolTip="Ultra-fast cloud transcription via Groq Whisper Large-v3" />
+
+                    <!-- Cancel Button -->
                     <Button Content="✕ Cancel" Command="{Binding CancelProcessingCommand}" 
                             Visibility="{Binding IsProcessing, Converter={StaticResource BoolToVis}}" 
                             Margin="8,0,0,0" Background="#DC2626" Foreground="#FFFFFF" BorderThickness="0" />
