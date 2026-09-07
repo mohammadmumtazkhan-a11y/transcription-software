@@ -63,7 +63,7 @@ public partial class MainWindowViewModel : ObservableObject
     private bool _isPlaying = false;
 
     [ObservableProperty]
-    private string _selectedOfflineModel = "small"; // base, small, medium
+    private string _selectedOfflineModel = "base"; // base (fastest), small (balanced), medium (accurate)
 
     public ObservableCollection<string> AvailableOfflineModels { get; } = new() { "base", "small", "medium" };
 
@@ -341,24 +341,30 @@ public partial class MainWindowViewModel : ObservableObject
             var wavPath = await _audioExtractor.Extract16kHzMonoAudioAsync(SourceMediaFilePath, tempDir, cancellationToken: _cts.Token);
             CurrentProject.ExtractedAudioFilePath = wavPath;
 
-            ProgressValue = 0.40;
-            StatusMessage = $"2/3 Running 100% offline transcription on CPU using faster-whisper '{SelectedOfflineModel}'...";
+            ProgressValue = 0.25;
+            StatusMessage = $"2/3 Running offline transcription on CPU using faster-whisper '{SelectedOfflineModel}'...";
 
+            Sentences.Clear();
             var terms = GlossaryTerms.Select(t => t.TermText).ToList();
             var progressReporter = new Progress<string>(msg => StatusMessage = msg);
+
+            Action<CleanSentence, AcousticSegment, double> onStreamed = (sentence, segment, ratio) =>
+            {
+                Application.Current.Dispatcher.Invoke(() =>
+                {
+                    Sentences.Add(sentence);
+                    ProgressValue = 0.25 + (0.70 * ratio);
+                    StatusMessage = $"Offline [{SelectedOfflineModel}]: [{sentence.FormattedTimestamp} / {TotalDuration:hh\\:mm\\:ss}] ({Sentences.Count} sentences) • {sentence.DisplayText}";
+                });
+            };
 
             var results = await _offlineService.TranscribeOfflineAsync(
                 wavPath, 
                 SelectedOfflineModel, 
                 terms, 
+                onStreamed,
                 progressReporter, 
                 _cts.Token);
-
-            Sentences.Clear();
-            foreach (var (sentence, _) in results)
-            {
-                Sentences.Add(sentence);
-            }
 
             ProgressValue = 1.0;
             StatusMessage = $"Offline transcription complete! Generated {Sentences.Count} sentence turns on local CPU. Cloud cost: $0.00.";

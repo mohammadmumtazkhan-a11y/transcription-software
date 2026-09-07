@@ -3,7 +3,7 @@ import json
 import os
 import sys
 
-def run_transcription(audio_path, model_size="small", task="translate", glossary=None, output_path=None):
+def run_transcription(audio_path, model_size="base", task="translate", glossary=None, output_path=None):
     if not os.path.exists(audio_path):
         print(f"Error: audio file {audio_path} does not exist", file=sys.stderr)
         sys.exit(1)
@@ -14,36 +14,41 @@ def run_transcription(audio_path, model_size="small", task="translate", glossary
         print("Error: faster_whisper is not installed in Python environment.", file=sys.stderr)
         sys.exit(2)
 
-    # Initial prompt biasing using glossary terms
     initial_prompt = None
     if glossary:
         initial_prompt = "Domain Glossary: " + ", ".join(glossary)
 
-    # Load model on CPU with INT8 quantization (optimized for Intel Core i5 AVX-512 / VNNI)
-    print(f"Loading faster-whisper model '{model_size}' on CPU (int8)...", file=sys.stderr)
+    # Load model on CPU with INT8 quantization
+    print(f"STATUS:Loading faster-whisper model '{model_size}' on CPU (int8)...", flush=True)
     model = WhisperModel(model_size, device="cpu", compute_type="int8", cpu_threads=4)
 
-    print(f"Transcribing '{audio_path}' with task='{task}'...", file=sys.stderr)
+    print(f"STATUS:Beginning transcription for '{os.path.basename(audio_path)}'...", flush=True)
     segments, info = model.transcribe(
         audio_path,
         task=task,
         initial_prompt=initial_prompt,
-        beam_size=5,
+        beam_size=3, # optimized for faster CPU decoding
         word_timestamps=False
     )
+
+    print(f"INFO:DURATION:{info.duration:.2f}", flush=True)
+    print(f"INFO:LANGUAGE:{info.language}:{info.language_probability:.2f}", flush=True)
 
     results = []
     for seg in segments:
         text = seg.text.strip()
         if text:
-            results.append({
+            item = {
                 "start": round(seg.start, 2),
                 "end": round(seg.end, 2),
                 "text": text,
                 "avg_logprob": round(seg.avg_logprob, 3),
                 "compression_ratio": round(seg.compression_ratio, 3),
                 "no_speech_prob": round(seg.no_speech_prob, 3)
-            })
+            }
+            results.append(item)
+            # Emit live segment stream to stdout
+            print("SEGMENT:" + json.dumps(item, ensure_ascii=False), flush=True)
 
     output_data = {
         "language": info.language,
@@ -55,14 +60,12 @@ def run_transcription(audio_path, model_size="small", task="translate", glossary
     if output_path:
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(output_data, f, indent=2, ensure_ascii=False)
-        print(f"Saved {len(results)} segments to {output_path}", file=sys.stderr)
-    else:
-        print(json.dumps(output_data, ensure_ascii=False))
+        print(f"STATUS:Finished transcribing {len(results)} segments.", flush=True)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Offline Speech Transcriber using faster-whisper")
     parser.add_argument("--audio", required=True, help="Path to input audio file")
-    parser.add_argument("--model", default="small", choices=["tiny", "base", "small", "medium", "large-v3"], help="Whisper model size")
+    parser.add_argument("--model", default="base", choices=["tiny", "base", "small", "medium", "large-v3"], help="Whisper model size")
     parser.add_argument("--task", default="translate", choices=["transcribe", "translate"], help="Task: translate to English or transcribe verbatim")
     parser.add_argument("--glossary", nargs="*", default=[], help="Domain glossary terms")
     parser.add_argument("--output", help="Path to save JSON output")
