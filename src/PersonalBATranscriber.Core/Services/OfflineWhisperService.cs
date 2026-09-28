@@ -154,6 +154,7 @@ public class OfflineWhisperService
                         SentenceId = $"SNT-OFF-{order:D4}",
                         ParentSegmentId = segment.SegmentId,
                         AnchorTimestamp = start,
+                        EndTimestamp = end,
                         SpeakerLabel = (order % 2 == 1) ? "Speaker 1" : "Speaker 2",
                         CleanedText = text,
                         DisplayOrder = order++

@@ -49,6 +49,7 @@ public class ProjectDatabaseService
                 SentenceId TEXT PRIMARY KEY,
                 ParentSegmentId TEXT NOT NULL,
                 AnchorTimestamp REAL NOT NULL,
+                EndTimestamp REAL DEFAULT 0,
                 SpeakerLabel TEXT DEFAULT 'Speaker 1',
                 CleanedText TEXT NOT NULL,
                 UserEditedText TEXT,
@@ -56,8 +57,27 @@ public class ProjectDatabaseService
             );
         ";
 
-        using var cmd = new SQLiteCommand(sql, conn);
-        cmd.ExecuteNonQuery();
+        using (var cmd = new SQLiteCommand(sql, conn))
+        {
+            cmd.ExecuteNonQuery();
+        }
+
+        // Upgrade project files created before EndTimestamp existed.
+        bool hasEndColumn = false;
+        using (var cmd = new SQLiteCommand("PRAGMA table_info(CleanSentences);", conn))
+        using (var reader = cmd.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                if (string.Equals(reader["name"]?.ToString(), "EndTimestamp", StringComparison.OrdinalIgnoreCase))
+                    hasEndColumn = true;
+            }
+        }
+        if (!hasEndColumn)
+        {
+            using var alter = new SQLiteCommand("ALTER TABLE CleanSentences ADD COLUMN EndTimestamp REAL DEFAULT 0;", conn);
+            alter.ExecuteNonQuery();
+        }
     }
 
     public static async Task SaveProjectAsync(
@@ -123,16 +143,17 @@ public class ProjectDatabaseService
         {
             var sntSql = @"
                 INSERT OR REPLACE INTO CleanSentences (
-                    SentenceId, ParentSegmentId, AnchorTimestamp, SpeakerLabel,
+                    SentenceId, ParentSegmentId, AnchorTimestamp, EndTimestamp, SpeakerLabel,
                     CleanedText, UserEditedText, DisplayOrder
                 ) VALUES (
-                    @id, @parent, @ts, @spk, @clean, @edit, @order
+                    @id, @parent, @ts, @end, @spk, @clean, @edit, @order
                 );
             ";
             using var cmd = new SQLiteCommand(sntSql, conn, tx);
             cmd.Parameters.AddWithValue("@id", snt.SentenceId);
             cmd.Parameters.AddWithValue("@parent", snt.ParentSegmentId);
             cmd.Parameters.AddWithValue("@ts", snt.AnchorTimestamp);
+            cmd.Parameters.AddWithValue("@end", snt.EndTimestamp);
             cmd.Parameters.AddWithValue("@spk", snt.SpeakerLabel);
             cmd.Parameters.AddWithValue("@clean", snt.CleanedText);
             cmd.Parameters.AddWithValue("@edit", (object?)snt.UserEditedText ?? DBNull.Value);
@@ -203,6 +224,9 @@ public class ProjectDatabaseService
                     SentenceId = reader["SentenceId"].ToString() ?? "",
                     ParentSegmentId = reader["ParentSegmentId"].ToString() ?? "",
                     AnchorTimestamp = Convert.ToDouble(reader["AnchorTimestamp"]),
+                    EndTimestamp = HasColumn(reader, "EndTimestamp") && reader["EndTimestamp"] is not DBNull
+                        ? Convert.ToDouble(reader["EndTimestamp"])
+                        : 0,
                     SpeakerLabel = reader["SpeakerLabel"].ToString() ?? "Speaker 1",
                     CleanedText = reader["CleanedText"].ToString() ?? "",
                     UserEditedText = reader["UserEditedText"] is DBNull ? null : reader["UserEditedText"].ToString(),
@@ -212,5 +236,15 @@ public class ProjectDatabaseService
         }
 
         return (meta, segments, sentences);
+    }
+
+    private static bool HasColumn(System.Data.IDataRecord reader, string name)
+    {
+        for (int i = 0; i < reader.FieldCount; i++)
+        {
+            if (string.Equals(reader.GetName(i), name, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
     }
 }

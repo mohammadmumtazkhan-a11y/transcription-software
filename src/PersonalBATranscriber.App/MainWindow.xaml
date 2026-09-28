@@ -67,7 +67,7 @@
         </Grid.RowDefinitions>
 
         <!-- Hidden MediaElement for audio playback -->
-        <MediaElement x:Name="AudioPlayer" LoadedBehavior="Manual" UnloadedBehavior="Stop" Visibility="Collapsed" />
+        <MediaElement x:Name="AudioPlayer" LoadedBehavior="Manual" UnloadedBehavior="Stop" Visibility="Collapsed" MediaEnded="AudioPlayer_MediaEnded" />
 
         <!-- 0: HEADER & BUDGET BAR -->
         <Border Grid.Row="0" Background="#FFFFFF" BorderBrush="#E2E8F0" BorderThickness="0,0,0,1" Padding="20,12">
@@ -197,8 +197,19 @@
                         <ItemsControl ItemsSource="{Binding Sentences}">
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
-                                    <Border Background="#FAFAFA" BorderBrush="#E2E8F0" BorderThickness="1" 
+                                    <Border BorderBrush="#E2E8F0" BorderThickness="1"
                                             CornerRadius="6" Margin="0,0,0,8" Padding="10">
+                                        <Border.Style>
+                                            <Style TargetType="Border">
+                                                <Setter Property="Background" Value="#FAFAFA" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsCurrentlyPlaying}" Value="True">
+                                                        <Setter Property="Background" Value="#EFF6FF" />
+                                                        <Setter Property="BorderBrush" Value="#93C5FD" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Border.Style>
                                         <Grid>
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="Auto" />
@@ -207,26 +218,46 @@
                                             </Grid.ColumnDefinitions>
 
                                             <!-- Timestamp Button -->
-                                            <Button Grid.Column="0" Content="{Binding FormattedTimestamp, StringFormat=[{0}]}" 
-                                                    Command="{Binding DataContext.PlaySentenceCommand, RelativeSource={RelativeSource AncestorType=Window}}" 
+                                            <Button Grid.Column="0" Content="{Binding FormattedTimestamp, StringFormat=[{0}]}"
+                                                    Command="{Binding DataContext.PlaySentenceCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                     CommandParameter="{Binding}"
-                                                    Background="#F1F5F9" Foreground="#0284C7" BorderThickness="0" 
+                                                    Background="#F1F5F9" Foreground="#0284C7" BorderThickness="0"
                                                     FontWeight="Bold" FontSize="11" Margin="0,0,10,0" VerticalAlignment="Top" />
 
                                             <!-- Editable Sentence Text -->
                                             <StackPanel Grid.Column="1" VerticalAlignment="Center">
                                                 <TextBlock Text="{Binding SpeakerLabel}" FontSize="11" FontWeight="Bold" Foreground="#64748B" Margin="0,0,0,2" />
                                                 <TextBox Text="{Binding UserEditedText, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
-                                                         BorderThickness="0" Background="Transparent" TextWrapping="Wrap" 
-                                                         FontSize="13" Foreground="#0F172A" />
+                                                         BorderThickness="0" Background="Transparent" TextWrapping="Wrap"
+                                                         FontSize="13" Foreground="#0F172A"
+                                                         ContextMenuOpening="SentenceTextBox_ContextMenuOpening">
+                                                    <TextBox.ContextMenu>
+                                                        <ContextMenu>
+                                                            <MenuItem Header="Correct Spelling…" Click="CorrectSpellingMenuItem_Click" />
+                                                        </ContextMenu>
+                                                    </TextBox.ContextMenu>
+                                                </TextBox>
                                             </StackPanel>
 
-                                            <!-- Direct Play Icon -->
-                                            <Button Grid.Column="2" Content="▶" 
+                                            <!-- Direct Play/Pause Icon -->
+                                            <Button Grid.Column="2"
                                                     Command="{Binding DataContext.PlaySentenceCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                     CommandParameter="{Binding}"
-                                                    Background="Transparent" BorderThickness="0" Foreground="#0284C7" 
-                                                    VerticalAlignment="Center" Margin="8,0,0,0" ToolTip="Play Sentence Audio" />
+                                                    Background="Transparent" BorderThickness="0" Foreground="#0284C7"
+                                                    VerticalAlignment="Center" Margin="8,0,0,0">
+                                                <Button.Style>
+                                                    <Style TargetType="Button">
+                                                        <Setter Property="Content" Value="▶" />
+                                                        <Setter Property="ToolTip" Value="Play Sentence Audio" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsCurrentlyPlaying}" Value="True">
+                                                                <Setter Property="Content" Value="⏸" />
+                                                                <Setter Property="ToolTip" Value="Pause Sentence Audio" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Button.Style>
+                                            </Button>
                                         </Grid>
                                     </Border>
                                 </DataTemplate>
@@ -309,6 +340,9 @@
                     <Button Content="💾 Save Project (.taproj)" Command="{Binding SaveProjectCommand}" Margin="0,0,10,0" Padding="12,6" />
                     <Button Content="📄 Export Word (.docx)" Command="{Binding ExportToWordCommand}" 
                             Background="#1E293B" Foreground="#FFFFFF" BorderThickness="0" Padding="14,6" FontWeight="Bold" />
+                    <Button x:Name="CloseAppBtn" Content="✕ Close" Click="CloseAppButton_Click"
+                            ToolTip="Close the application"
+                            Margin="10,0,0,0" Background="#DC2626" Foreground="#FFFFFF" BorderThickness="0" Padding="14,6" FontWeight="Bold" />
                 </StackPanel>
             </Grid>
         </Border>

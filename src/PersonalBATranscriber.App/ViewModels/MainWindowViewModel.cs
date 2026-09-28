@@ -62,6 +62,22 @@ public partial class MainWindowViewModel : ObservableObject
     [ObservableProperty]
     private bool _isPlaying = false;
 
+    // Audio file actually fed to the player. After transcription this switches
+    // to the extracted 16 kHz PCM WAV, which seeks sample-accurately (compressed
+    // MP3/M4A/MP4 seeking in WPF's MediaElement can land a second or more off).
+    [ObservableProperty]
+    private string _playbackMediaPath = string.Empty;
+
+    // Small padding so the first/last syllable isn't clipped.
+    private const double SentenceLeadInSeconds = 0.10;
+    private const double SentenceTailSeconds = 0.20;
+
+    /// <summary>
+    /// When set, playback must stop automatically once the player reaches this
+    /// position (end of the sentence the user clicked). Null = free playback.
+    /// </summary>
+    public double? PlaybackStopAtSeconds { get; private set; }
+
     [ObservableProperty]
     private string _selectedOfflineModel = "base"; // base (fastest), small (balanced), medium (accurate)
 
@@ -76,6 +92,11 @@ public partial class MainWindowViewModel : ObservableObject
     public event Action<TimeSpan>? RequestMediaSeek;
     public event Action? RequestPlay;
     public event Action? RequestPause;
+
+    partial void OnSourceMediaFilePathChanged(string value)
+    {
+        PlaybackMediaPath = value;
+    }
 
     public MainWindowViewModel()
     {
@@ -154,6 +175,34 @@ public partial class MainWindowViewModel : ObservableObject
         {
             GlossaryTerms.Remove(term);
         }
+    }
+
+    /// <summary>
+    /// Called when the user right-clicks a word in the transcript and supplies the
+    /// correct spelling. Fixes every occurrence of the word in the current transcript
+    /// and remembers the correction so future transcriptions apply it automatically.
+    /// </summary>
+    public void ApplySpellingCorrection(string wrongWord, string correctWord)
+    {
+        if (string.IsNullOrWhiteSpace(wrongWord) || string.IsNullOrWhiteSpace(correctWord))
+            return;
+
+        SpellingCorrectionStore.SaveCorrection(wrongWord, correctWord);
+
+        int totalReplacements = 0;
+        foreach (var sentence in Sentences)
+        {
+            var updated = SpellingCorrectionStore.ApplyWholeWord(sentence.UserEditedText, wrongWord, correctWord, out var count);
+            if (count > 0)
+            {
+                sentence.UserEditedText = updated;
+                totalReplacements += count;
+            }
+        }
+
+        StatusMessage = totalReplacements > 0
+            ? $"Corrected \"{wrongWord}\" \u2192 \"{correctWord}\" ({totalReplacements} occurrence{(totalReplacements == 1 ? string.Empty : "s")} updated). This spelling will be auto-corrected in future transcriptions too."
+            : $"Saved \"{wrongWord}\" \u2192 \"{correctWord}\" as a correction for future transcriptions.";
     }
 
     [RelayCommand]
@@ -246,6 +295,10 @@ public partial class MainWindowViewModel : ObservableObject
                 var tempDir = Path.Combine(Path.GetTempPath(), "PersonalBATranscriber", projectId);
                 var wavPath = await _audioExtractor.Extract16kHzMonoAudioAsync(mediaPath, tempDir, cancellationToken: _cts.Token);
                 CurrentProject.ExtractedAudioFilePath = wavPath;
+                await Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    if (File.Exists(wavPath)) PlaybackMediaPath = wavPath;
+                });
 
                 // 3. Chunk audio
                 await Application.Current.Dispatcher.InvokeAsync(() =>
@@ -299,11 +352,15 @@ public partial class MainWindowViewModel : ObservableObject
                         if (!cleanText.EndsWith('.') && !cleanText.EndsWith('!') && !cleanText.EndsWith('?'))
                             cleanText += ".";
 
+                        // Apply any spelling corrections the user has taught the app previously.
+                        cleanText = SpellingCorrectionStore.ApplyAllKnownCorrections(cleanText);
+
                         var sentence = new CleanSentence
                         {
                             SentenceId = $"SNT-{sentenceOrder:D4}",
                             ParentSegmentId = $"SEG-{i:D4}",
                             AnchorTimestamp = segTime,
+                            EndTimestamp = segTime + timeStep,
                             SpeakerLabel = (sentenceOrder % 2 == 1) ? "Speaker 1" : "Speaker 2",
                             CleanedText = cleanText,
                             DisplayOrder = sentenceOrder++
@@ -382,6 +439,10 @@ public partial class MainWindowViewModel : ObservableObject
                 var tempDir = Path.Combine(Path.GetTempPath(), "PersonalBATranscriber", projectId);
                 var wavPath = await _audioExtractor.Extract16kHzMonoAudioAsync(mediaPath, tempDir, cancellationToken: _cts.Token);
                 CurrentProject.ExtractedAudioFilePath = wavPath;
+                await Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    if (File.Exists(wavPath)) PlaybackMediaPath = wavPath;
+                });
 
                 await Application.Current.Dispatcher.InvokeAsync(() =>
                 {
@@ -399,6 +460,8 @@ public partial class MainWindowViewModel : ObservableObject
                 {
                     Application.Current.Dispatcher.InvokeAsync(() =>
                     {
+                        // Apply any spelling corrections the user has taught the app previously.
+                        sentence.CleanedText = SpellingCorrectionStore.ApplyAllKnownCorrections(sentence.CleanedText);
                         Sentences.Add(sentence);
                         ProgressValue = 0.25 + (0.70 * ratio);
                         StatusMessage = $"Offline [{model}]: [{sentence.FormattedTimestamp} / {TotalDuration:hh\\:mm\\:ss}] ({Sentences.Count} sentences) • {sentence.DisplayText}";
@@ -446,10 +509,81 @@ public partial class MainWindowViewModel : ObservableObject
     public void PlaySentence(CleanSentence? sentence)
     {
         if (sentence == null) return;
+
+        // Clicking the sentence that is already playing pauses it in place
+        // instead of restarting it from the top.
+        if (IsPlaying && SelectedSentence == sentence)
+        {
+            RequestPause?.Invoke();
+            IsPlaying = false;
+            sentence.IsCurrentlyPlaying = false;
+            return;
+        }
+
+        if (SelectedSentence != null)
+        {
+            SelectedSentence.IsCurrentlyPlaying = false;
+        }
+
+        var (start, end) = GetSentencePlaybackRange(sentence);
+
         SelectedSentence = sentence;
-        RequestMediaSeek?.Invoke(TimeSpan.FromSeconds(sentence.AnchorTimestamp));
+        PlaybackStopAtSeconds = end;
+        RequestMediaSeek?.Invoke(TimeSpan.FromSeconds(start));
         RequestPlay?.Invoke();
         IsPlaying = true;
+        sentence.IsCurrentlyPlaying = true;
+    }
+
+    /// <summary>
+    /// Works out exactly which slice of audio belongs to a sentence:
+    /// its own start/end timestamps, with a tiny lead-in/tail, never running
+    /// into the next sentence. Falls back to the next sentence's start when
+    /// the end time is unknown (older project files).
+    /// </summary>
+    public (double Start, double? End) GetSentencePlaybackRange(CleanSentence sentence)
+    {
+        int index = Sentences.IndexOf(sentence);
+        double? nextStart = null;
+        if (index >= 0 && index + 1 < Sentences.Count)
+        {
+            var next = Sentences[index + 1].AnchorTimestamp;
+            if (next > sentence.AnchorTimestamp) nextStart = next;
+        }
+
+        double start = Math.Max(0, sentence.AnchorTimestamp - SentenceLeadInSeconds);
+
+        double? end = sentence.EndTimestamp > sentence.AnchorTimestamp
+            ? sentence.EndTimestamp + SentenceTailSeconds
+            : nextStart;
+
+        if (end.HasValue && nextStart.HasValue && end.Value > nextStart.Value && sentence.EndTimestamp <= nextStart.Value)
+        {
+            // Don't bleed the tail padding into the next sentence.
+            end = Math.Max(sentence.EndTimestamp, nextStart.Value);
+        }
+
+        if (end.HasValue && TotalDurationSeconds > 0)
+            end = Math.Min(end.Value, TotalDurationSeconds);
+
+        return (start, end);
+    }
+
+    /// <summary>
+    /// Called by the code-behind when playback reaches the end of the clicked
+    /// sentence. Pauses and rewinds to the sentence start so it can be replayed.
+    /// </summary>
+    public void NotifySentencePlaybackFinished()
+    {
+        PlaybackStopAtSeconds = null;
+        RequestPause?.Invoke();
+        IsPlaying = false;
+        if (SelectedSentence != null)
+        {
+            SelectedSentence.IsCurrentlyPlaying = false;
+            var (start, _) = GetSentencePlaybackRange(SelectedSentence);
+            RequestMediaSeek?.Invoke(TimeSpan.FromSeconds(start));
+        }
     }
 
     [RelayCommand]
@@ -459,19 +593,41 @@ public partial class MainWindowViewModel : ObservableObject
         {
             RequestPause?.Invoke();
             IsPlaying = false;
+            if (SelectedSentence != null)
+            {
+                SelectedSentence.IsCurrentlyPlaying = false;
+            }
         }
         else
         {
+            // Toolbar Play is free playback of the whole recording; only the
+            // per-sentence play buttons stop at a sentence boundary.
+            PlaybackStopAtSeconds = null;
             RequestPlay?.Invoke();
             IsPlaying = true;
         }
     }
+
+    // Called from the code-behind when MediaElement reaches the end of the
+    // recording naturally, so state doesn't get stuck showing "Pause".
+    public void NotifyPlaybackEnded()
+    {
+        PlaybackStopAtSeconds = null;
+        IsPlaying = false;
+        if (SelectedSentence != null)
+        {
+            SelectedSentence.IsCurrentlyPlaying = false;
+        }
+    }
+
+    public void CancelSentenceStop() => PlaybackStopAtSeconds = null;
 
     [RelayCommand]
     public void SkipBackward()
     {
         var newPos = CurrentPosition - TimeSpan.FromSeconds(5);
         if (newPos < TimeSpan.Zero) newPos = TimeSpan.Zero;
+        PlaybackStopAtSeconds = null;
         RequestMediaSeek?.Invoke(newPos);
     }
 
@@ -480,6 +636,7 @@ public partial class MainWindowViewModel : ObservableObject
     {
         var newPos = CurrentPosition + TimeSpan.FromSeconds(5);
         if (newPos > TotalDuration) newPos = TotalDuration;
+        PlaybackStopAtSeconds = null;
         RequestMediaSeek?.Invoke(newPos);
     }
 

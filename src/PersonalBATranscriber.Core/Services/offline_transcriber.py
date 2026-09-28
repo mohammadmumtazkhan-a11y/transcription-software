@@ -28,7 +28,10 @@ def run_transcription(audio_path, model_size="base", task="translate", glossary=
         task=task,
         initial_prompt=initial_prompt,
         beam_size=3, # optimized for faster CPU decoding
-        word_timestamps=False
+        # Word-level timestamps make each segment's start/end snap to the
+        # first/last spoken word, so "play this sentence" starts and stops
+        # exactly on the speech instead of on Whisper's coarse 30s-window guesses.
+        word_timestamps=True
     )
 
     print(f"INFO:DURATION:{info.duration:.2f}", flush=True)
@@ -38,9 +41,13 @@ def run_transcription(audio_path, model_size="base", task="translate", glossary=
     for seg in segments:
         text = seg.text.strip()
         if text:
+            start, end = seg.start, seg.end
+            words = [w for w in (seg.words or []) if w.word.strip()]
+            if words:
+                start, end = words[0].start, words[-1].end
             item = {
-                "start": round(seg.start, 2),
-                "end": round(seg.end, 2),
+                "start": round(start, 2),
+                "end": round(end, 2),
                 "text": text,
                 "avg_logprob": round(seg.avg_logprob, 3),
                 "compression_ratio": round(seg.compression_ratio, 3),
